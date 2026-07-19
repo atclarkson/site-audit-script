@@ -458,7 +458,6 @@ async function callClaude(apiKey: string, model: string, prompt: string): Promis
     body: JSON.stringify({
       model,
       max_tokens: MAX_PROMPT_OUTPUT_TOKENS,
-      temperature: 0.2,
       messages: [
         {
           role: "user",
