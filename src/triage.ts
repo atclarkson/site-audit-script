@@ -46,14 +46,14 @@ const CLAUDE_ANALYSIS_SCHEMA = {
     page_purpose: { type: "string" },
     primary_search_intent: { type: "string" },
     content_cluster: { type: "string" },
-    distinctiveness_score: { type: "integer", minimum: 0, maximum: 100 },
-    firsthand_evidence_score: { type: "integer", minimum: 0, maximum: 100 },
-    specificity_score: { type: "integer", minimum: 0, maximum: 100 },
-    commercial_pressure_score: { type: "integer", minimum: 0, maximum: 100 },
-    templated_language_score: { type: "integer", minimum: 0, maximum: 100 },
-    overlap_risk_score: { type: "integer", minimum: 0, maximum: 100 },
-    trust_evidence_score: { type: "integer", minimum: 0, maximum: 100 },
-    likely_user_value_score: { type: "integer", minimum: 0, maximum: 100 },
+    distinctiveness_score: { type: "integer" },
+    firsthand_evidence_score: { type: "integer" },
+    specificity_score: { type: "integer" },
+    commercial_pressure_score: { type: "integer" },
+    templated_language_score: { type: "integer" },
+    overlap_risk_score: { type: "integer" },
+    trust_evidence_score: { type: "integer" },
+    likely_user_value_score: { type: "integer" },
     strengths: { type: "array", items: { type: "string" } },
     weaknesses: { type: "array", items: { type: "string" } },
     evidence_missing: { type: "array", items: { type: "string" } },
@@ -459,8 +459,22 @@ async function writeCache(url: string, entry: CacheEntry): Promise<void> {
 
 export function parseClaudeJson(text: string): ClaudeAnalysis {
   const parsed = JSON.parse(text) as ClaudeAnalysis;
+  const normalizeScore = (value: unknown, field: string): number => {
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+      throw new Error(`Claude response field ${field} must be a finite number`);
+    }
+    return Math.min(100, Math.max(0, Math.round(value)));
+  };
   return {
     ...parsed,
+    distinctiveness_score: normalizeScore(parsed.distinctiveness_score, "distinctiveness_score"),
+    firsthand_evidence_score: normalizeScore(parsed.firsthand_evidence_score, "firsthand_evidence_score"),
+    specificity_score: normalizeScore(parsed.specificity_score, "specificity_score"),
+    commercial_pressure_score: normalizeScore(parsed.commercial_pressure_score, "commercial_pressure_score"),
+    templated_language_score: normalizeScore(parsed.templated_language_score, "templated_language_score"),
+    overlap_risk_score: normalizeScore(parsed.overlap_risk_score, "overlap_risk_score"),
+    trust_evidence_score: normalizeScore(parsed.trust_evidence_score, "trust_evidence_score"),
+    likely_user_value_score: normalizeScore(parsed.likely_user_value_score, "likely_user_value_score"),
     strengths: parsed.strengths ?? [],
     weaknesses: parsed.weaknesses ?? [],
     evidence_missing: parsed.evidence_missing ?? [],

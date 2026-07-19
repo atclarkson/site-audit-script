@@ -57,6 +57,14 @@ test("valid structured JSON parsing succeeds", () => {
   assert.equal(parsed.recommended_disposition, "IMPROVE");
 });
 
+test("out-of-range scores are clamped and rounded", () => {
+  const parsed = parseClaudeJson(`{"page_purpose":"Guide","primary_search_intent":"Find tickets","content_cluster":"TEAMLAB","distinctiveness_score":101.7,"firsthand_evidence_score":-5,"specificity_score":65.4,"commercial_pressure_score":200,"templated_language_score":10,"overlap_risk_score":30,"trust_evidence_score":55,"likely_user_value_score":62,"strengths":["specific"],"weaknesses":["dated"],"evidence_missing":["pricing proof"],"overlapping_topics":["teamlab"],"recommended_disposition":"IMPROVE","recommended_action":"Update firsthand details.","confidence":"MEDIUM"}`);
+  assert.equal(parsed.distinctiveness_score, 100);
+  assert.equal(parsed.firsthand_evidence_score, 0);
+  assert.equal(parsed.specificity_score, 65);
+  assert.equal(parsed.commercial_pressure_score, 100);
+});
+
 test("missing text response throws a clear error", () => {
   assert.throws(
     () => parseClaudeResponse("claude-sonnet-5", {
