@@ -11,6 +11,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "audit": "npm run build --silent && node dist/src/cli.js",
     "compare": "npm run build --silent && node dist/src/compare.js",
+    "recover": "npm run build --silent && node dist/src/recover.js",
     "test": "npm run build --silent && node --test dist/test/*.test.js"
   },
   "dependencies": {

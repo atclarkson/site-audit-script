@@ -2,12 +2,12 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { stringify } from "csv-stringify/sync";
 
-type RedirectRules = {
+export type RedirectRules = {
   exact: Map<string, string>;
   regex: Array<{ pattern: RegExp; replacement: string }>;
 };
 
-type GscRow = {
+export type GscRow = {
   url: string;
   clicks: number;
   impressions: number;
@@ -58,7 +58,7 @@ const DEFAULT_AFTER_PATH = "input/gsc-after.csv";
 const DEFAULT_REDIRECTS_PATH = "input/redirects.yaml";
 const DEFAULT_OUTPUT_PATH = "output/gsc-comparison.csv";
 
-function parseCsvLine(line: string): string[] {
+export function parseCsvLine(line: string): string[] {
   const values: string[] = [];
   let current = "";
   let inQuotes = false;
@@ -84,13 +84,13 @@ function parseCsvLine(line: string): string[] {
   return values.map((value) => value.trim());
 }
 
-function parseNumber(value: string): number {
+export function parseNumber(value: string): number {
   const cleaned = value.replace(/[%,$\s]/g, "");
   const parsed = Number(cleaned);
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function normalizePath(pathname: string): string {
+export function normalizePath(pathname: string): string {
   const withoutQuery = pathname.split("?")[0].split("#")[0] ?? pathname;
   const withLeadingSlash = withoutQuery.startsWith("/") ? withoutQuery : `/${withoutQuery}`;
   if (withLeadingSlash === "/") {
