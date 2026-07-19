@@ -47,8 +47,9 @@ test("redirect alias grouping uses the final current URL", () => {
 });
 
 test("cache reuse depends on matching content hash and model", () => {
-  assert.equal(shouldReuseCache({ model: "x", url: "u", contentHash: "abc", result: {} as never, analyzedAt: "now" }, "x", "abc"), true);
-  assert.equal(shouldReuseCache({ model: "x", url: "u", contentHash: "abc", result: {} as never, analyzedAt: "now" }, "y", "abc"), false);
+  assert.equal(shouldReuseCache({ model: "x", promptVersion: "content-triage-v2", url: "u", contentHash: "abc", result: {} as never, analyzedAt: "now" }, "x", "abc"), true);
+  assert.equal(shouldReuseCache({ model: "x", promptVersion: "content-triage-v1", url: "u", contentHash: "abc", result: {} as never, analyzedAt: "now" }, "x", "abc"), false);
+  assert.equal(shouldReuseCache({ model: "x", promptVersion: "content-triage-v2", url: "u", contentHash: "abc", result: {} as never, analyzedAt: "now" }, "y", "abc"), false);
 });
 
 test("valid structured JSON parsing succeeds", () => {
@@ -63,6 +64,19 @@ test("out-of-range scores are clamped and rounded", () => {
   assert.equal(parsed.firsthand_evidence_score, 0);
   assert.equal(parsed.specificity_score, 65);
   assert.equal(parsed.commercial_pressure_score, 100);
+});
+
+test("clear 1-10 score responses are multiplied by 10", () => {
+  const parsed = parseClaudeJson(`{"page_purpose":"Guide","primary_search_intent":"Find tickets","content_cluster":"TEAMLAB","distinctiveness_score":6,"firsthand_evidence_score":7,"specificity_score":5,"commercial_pressure_score":4,"templated_language_score":3,"overlap_risk_score":8,"trust_evidence_score":2,"likely_user_value_score":9,"strengths":["specific"],"weaknesses":["dated"],"evidence_missing":["pricing proof"],"overlapping_topics":["teamlab"],"recommended_disposition":"IMPROVE","recommended_action":"Update firsthand details.","confidence":"MEDIUM"}`);
+  assert.equal(parsed.distinctiveness_score, 60);
+  assert.equal(parsed.likely_user_value_score, 90);
+  assert.equal(parsed.score_scale_normalized, "yes");
+});
+
+test("legitimate 0-100 scores remain unchanged", () => {
+  const parsed = parseClaudeJson(`{"page_purpose":"Guide","primary_search_intent":"Find tickets","content_cluster":"TEAMLAB","distinctiveness_score":60,"firsthand_evidence_score":70,"specificity_score":65,"commercial_pressure_score":20,"templated_language_score":10,"overlap_risk_score":30,"trust_evidence_score":55,"likely_user_value_score":62,"strengths":["specific"],"weaknesses":["dated"],"evidence_missing":["pricing proof"],"overlapping_topics":["teamlab"],"recommended_disposition":"IMPROVE","recommended_action":"Update firsthand details.","confidence":"MEDIUM"}`);
+  assert.equal(parsed.distinctiveness_score, 60);
+  assert.equal(parsed.score_scale_normalized, "no");
 });
 
 test("missing text response throws a clear error", () => {
@@ -108,6 +122,7 @@ test("final priority sorting is descending", () => {
       overlap_risk_score: 0,
       trust_evidence_score: 0,
       likely_user_value_score: 0,
+      score_scale_normalized: "no",
       overlap_with_urls: "",
       overlap_summary: "",
       strengths: "",
@@ -141,6 +156,7 @@ test("final priority sorting is descending", () => {
       overlap_risk_score: 0,
       trust_evidence_score: 0,
       likely_user_value_score: 0,
+      score_scale_normalized: "no",
       overlap_with_urls: "",
       overlap_summary: "",
       strengths: "",

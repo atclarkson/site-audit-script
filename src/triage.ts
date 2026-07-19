@@ -7,6 +7,7 @@ import type { AuditOptions } from "./types.js";
 import { buildComparisonRows, normalizeSiteUrl, parseCsvLine, parseGscCsv, parseRedirectsYaml } from "./compare.js";
 
 const DEFAULT_MODEL = "claude-sonnet-5";
+const PROMPT_VERSION = "content-triage-v2";
 const DEFAULT_LIMIT = 50;
 const DEFAULT_CONCURRENCY = 2;
 const MAX_CONTENT_CHARS = 16000;
@@ -150,11 +151,16 @@ type ClaudeAnalysis = {
   confidence: "LOW" | "MEDIUM" | "HIGH";
 };
 
+type ParsedClaudeAnalysis = ClaudeAnalysis & {
+  score_scale_normalized: "yes" | "no";
+};
+
 type CacheEntry = {
   model: string;
+  promptVersion: string;
   url: string;
   contentHash: string;
-  result: ClaudeAnalysis;
+  result: ParsedClaudeAnalysis;
   usage?: {
     input_tokens?: number;
     output_tokens?: number;
@@ -183,6 +189,7 @@ type TriageRow = {
   overlap_risk_score: number;
   trust_evidence_score: number;
   likely_user_value_score: number;
+  score_scale_normalized: string;
   overlap_with_urls: string;
   overlap_summary: string;
   strengths: string;
@@ -440,7 +447,7 @@ function getCachePath(url: string): string {
 }
 
 export function shouldReuseCache(entry: CacheEntry | null, model: string, contentHash: string): boolean {
-  return Boolean(entry && entry.model === model && entry.contentHash === contentHash);
+  return Boolean(entry && entry.model === model && entry.promptVersion === PROMPT_VERSION && entry.contentHash === contentHash);
 }
 
 async function readCache(url: string): Promise<CacheEntry | null> {
@@ -457,15 +464,28 @@ async function writeCache(url: string, entry: CacheEntry): Promise<void> {
   await writeFile(getCachePath(url), JSON.stringify(entry, null, 2), "utf8");
 }
 
-export function parseClaudeJson(text: string): ClaudeAnalysis {
+export function parseClaudeJson(text: string): ParsedClaudeAnalysis {
   const parsed = JSON.parse(text) as ClaudeAnalysis;
+  const rawScores = [
+    parsed.distinctiveness_score,
+    parsed.firsthand_evidence_score,
+    parsed.specificity_score,
+    parsed.commercial_pressure_score,
+    parsed.templated_language_score,
+    parsed.overlap_risk_score,
+    parsed.trust_evidence_score,
+    parsed.likely_user_value_score
+  ];
+  const likelyTenPointScale = rawScores.filter((value) => typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 10).length >= 6 &&
+    rawScores.every((value) => typeof value === "number" && Number.isFinite(value) ? value <= 10 : false);
   const normalizeScore = (value: unknown, field: string): number => {
     if (typeof value !== "number" || !Number.isFinite(value)) {
       throw new Error(`Claude response field ${field} must be a finite number`);
     }
-    return Math.min(100, Math.max(0, Math.round(value)));
+    const scaled = likelyTenPointScale ? value * 10 : value;
+    return Math.min(100, Math.max(0, Math.round(scaled)));
   };
-  return {
+  const normalized: ParsedClaudeAnalysis = {
     ...parsed,
     distinctiveness_score: normalizeScore(parsed.distinctiveness_score, "distinctiveness_score"),
     firsthand_evidence_score: normalizeScore(parsed.firsthand_evidence_score, "firsthand_evidence_score"),
@@ -478,8 +498,10 @@ export function parseClaudeJson(text: string): ClaudeAnalysis {
     strengths: parsed.strengths ?? [],
     weaknesses: parsed.weaknesses ?? [],
     evidence_missing: parsed.evidence_missing ?? [],
-    overlapping_topics: parsed.overlapping_topics ?? []
+    overlapping_topics: parsed.overlapping_topics ?? [],
+    score_scale_normalized: likelyTenPointScale ? "yes" : "no"
   };
+  return normalized;
 }
 
 function estimateTokens(text: string): number {
@@ -493,6 +515,7 @@ function buildPrompt(candidate: CandidateRow, page: FetchedPage): string {
     "Return strict JSON only.",
     "Allowed recommended_disposition values: KEEP, IMPROVE, REBUILD, MERGE_REVIEW, NOINDEX_REVIEW, REMOVE_REVIEW.",
     "Judge whether the page would deserve to exist without affiliate commission. Look for firsthand travel/use/testing evidence. Distinguish specificity from generic claims. Identify repetitive promotional framing or keyword templates. Do not recommend filler.",
+    "Every score must use the full 0–100 scale, not a 0–10 or 1–10 scale.\nExamples:\n- extremely weak = 5\n- weak = 25\n- average = 50\n- strong = 75\n- exceptional = 95\nDo not return single-digit scores unless the attribute is nearly completely absent.",
     `URL: ${candidate.url}`,
     `Final URL: ${page.finalUrl}`,
     `Cluster hint: ${candidate.contentCluster}`,
@@ -511,7 +534,7 @@ type ClaudeApiResponse = {
   usage?: { input_tokens?: number; output_tokens?: number };
 };
 
-export function parseClaudeResponse(model: string, json: ClaudeApiResponse): { result: ClaudeAnalysis; usage?: { input_tokens?: number; output_tokens?: number } } {
+export function parseClaudeResponse(model: string, json: ClaudeApiResponse): { result: ParsedClaudeAnalysis; usage?: { input_tokens?: number; output_tokens?: number } } {
   const textBlocks = json.content?.filter((item) => item.type === "text" && typeof item.text === "string") ?? [];
   const text = textBlocks.map((item) => item.text ?? "").join("\n").trim();
 
@@ -530,7 +553,7 @@ export function parseClaudeResponse(model: string, json: ClaudeApiResponse): { r
   };
 }
 
-async function callClaude(apiKey: string, model: string, prompt: string): Promise<{ result: ClaudeAnalysis; usage?: { input_tokens?: number; output_tokens?: number } }> {
+async function callClaude(apiKey: string, model: string, prompt: string): Promise<{ result: ParsedClaudeAnalysis; usage?: { input_tokens?: number; output_tokens?: number } }> {
   const response = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
@@ -575,7 +598,7 @@ async function analyzeCandidate(
   model: string,
   refresh: boolean,
   stats: TriageStats
-): Promise<{ candidate: CandidateRow; page: FetchedPage; analysis: ClaudeAnalysis; analyzedAt: string }> {
+): Promise<{ candidate: CandidateRow; page: FetchedPage; analysis: ParsedClaudeAnalysis; analyzedAt: string }> {
   const page = await fetchPageContent(candidate.finalUrl);
   const cached = refresh ? null : await readCache(candidate.url);
   if (shouldReuseCache(cached, model, page.contentHash)) {
@@ -602,6 +625,7 @@ async function analyzeCandidate(
       const analyzedAt = new Date().toISOString();
       await writeCache(candidate.url, {
         model,
+        promptVersion: PROMPT_VERSION,
         url: candidate.url,
         contentHash: page.contentHash,
         result: response.result,
@@ -739,6 +763,7 @@ async function writeCsv(rows: TriageRow[]): Promise<void> {
     "overlap_risk_score",
     "trust_evidence_score",
     "likely_user_value_score",
+    "score_scale_normalized",
     "overlap_with_urls",
     "overlap_summary",
     "strengths",
@@ -869,6 +894,7 @@ async function main(): Promise<void> {
       overlap_risk_score: result.analysis.overlap_risk_score,
       trust_evidence_score: result.analysis.trust_evidence_score,
       likely_user_value_score: result.analysis.likely_user_value_score,
+      score_scale_normalized: result.analysis.score_scale_normalized,
       overlap_with_urls: joinList(overlap.urls),
       overlap_summary: overlap.summary,
       strengths: joinList(result.analysis.strengths),
