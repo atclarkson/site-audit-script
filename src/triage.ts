@@ -10,7 +10,7 @@ const DEFAULT_MODEL = "claude-sonnet-5";
 const DEFAULT_LIMIT = 50;
 const DEFAULT_CONCURRENCY = 2;
 const MAX_CONTENT_CHARS = 16000;
-const MAX_PROMPT_OUTPUT_TOKENS = 1200;
+const MAX_PROMPT_OUTPUT_TOKENS = 2500;
 const ANTHROPIC_VERSION = "2023-06-01";
 const CACHE_DIR = "output/cache";
 const OUTPUT_PATH = "output/content-triage.csv";
@@ -18,6 +18,54 @@ const MODEL_PRICING = {
   inputPerMillion: 3,
   outputPerMillion: 15
 };
+
+const CLAUDE_ANALYSIS_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "page_purpose",
+    "primary_search_intent",
+    "content_cluster",
+    "distinctiveness_score",
+    "firsthand_evidence_score",
+    "specificity_score",
+    "commercial_pressure_score",
+    "templated_language_score",
+    "overlap_risk_score",
+    "trust_evidence_score",
+    "likely_user_value_score",
+    "strengths",
+    "weaknesses",
+    "evidence_missing",
+    "overlapping_topics",
+    "recommended_disposition",
+    "recommended_action",
+    "confidence"
+  ],
+  properties: {
+    page_purpose: { type: "string" },
+    primary_search_intent: { type: "string" },
+    content_cluster: { type: "string" },
+    distinctiveness_score: { type: "integer", minimum: 0, maximum: 100 },
+    firsthand_evidence_score: { type: "integer", minimum: 0, maximum: 100 },
+    specificity_score: { type: "integer", minimum: 0, maximum: 100 },
+    commercial_pressure_score: { type: "integer", minimum: 0, maximum: 100 },
+    templated_language_score: { type: "integer", minimum: 0, maximum: 100 },
+    overlap_risk_score: { type: "integer", minimum: 0, maximum: 100 },
+    trust_evidence_score: { type: "integer", minimum: 0, maximum: 100 },
+    likely_user_value_score: { type: "integer", minimum: 0, maximum: 100 },
+    strengths: { type: "array", items: { type: "string" } },
+    weaknesses: { type: "array", items: { type: "string" } },
+    evidence_missing: { type: "array", items: { type: "string" } },
+    overlapping_topics: { type: "array", items: { type: "string" } },
+    recommended_disposition: {
+      type: "string",
+      enum: ["KEEP", "IMPROVE", "REBUILD", "MERGE_REVIEW", "NOINDEX_REVIEW", "REMOVE_REVIEW"]
+    },
+    recommended_action: { type: "string" },
+    confidence: { type: "string", enum: ["LOW", "MEDIUM", "HIGH"] }
+  }
+} as const;
 
 const REQUEST_OPTIONS: AuditOptions = {
   limit: DEFAULT_LIMIT,
@@ -410,11 +458,7 @@ async function writeCache(url: string, entry: CacheEntry): Promise<void> {
 }
 
 export function parseClaudeJson(text: string): ClaudeAnalysis {
-  const match = text.match(/\{[\s\S]*\}/);
-  if (!match) {
-    throw new Error("Claude response did not include JSON");
-  }
-  const parsed = JSON.parse(match[0]) as ClaudeAnalysis;
+  const parsed = JSON.parse(text) as ClaudeAnalysis;
   return {
     ...parsed,
     strengths: parsed.strengths ?? [],
@@ -447,6 +491,31 @@ function buildPrompt(candidate: CandidateRow, page: FetchedPage): string {
   ].join("\n\n");
 }
 
+type ClaudeApiResponse = {
+  content?: Array<{ type: string; text?: string }>;
+  stop_reason?: string | null;
+  usage?: { input_tokens?: number; output_tokens?: number };
+};
+
+export function parseClaudeResponse(model: string, json: ClaudeApiResponse): { result: ClaudeAnalysis; usage?: { input_tokens?: number; output_tokens?: number } } {
+  const textBlocks = json.content?.filter((item) => item.type === "text" && typeof item.text === "string") ?? [];
+  const text = textBlocks.map((item) => item.text ?? "").join("\n").trim();
+
+  if (json.stop_reason === "max_tokens") {
+    throw new Error(`Anthropic response hit max_tokens for model ${model}; stop_reason: ${json.stop_reason}; returned text: ${text}`);
+  }
+
+  if (!text) {
+    const blockTypes = json.content?.map((item) => item.type).join(", ") ?? "";
+    throw new Error(`Anthropic response missing text for model ${model}; stop_reason: ${json.stop_reason ?? "unknown"}; content block types: ${blockTypes}`);
+  }
+
+  return {
+    result: parseClaudeJson(text),
+    usage: json.usage
+  };
+}
+
 async function callClaude(apiKey: string, model: string, prompt: string): Promise<{ result: ClaudeAnalysis; usage?: { input_tokens?: number; output_tokens?: number } }> {
   const response = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -458,6 +527,12 @@ async function callClaude(apiKey: string, model: string, prompt: string): Promis
     body: JSON.stringify({
       model,
       max_tokens: MAX_PROMPT_OUTPUT_TOKENS,
+      output_config: {
+        format: {
+          type: "json_schema",
+          schema: CLAUDE_ANALYSIS_SCHEMA
+        }
+      },
       messages: [
         {
           role: "user",
@@ -474,13 +549,10 @@ async function callClaude(apiKey: string, model: string, prompt: string): Promis
 
   const json = await response.json() as {
     content?: Array<{ type: string; text?: string }>;
+    stop_reason?: string | null;
     usage?: { input_tokens?: number; output_tokens?: number };
   };
-  const text = json.content?.map((item) => item.text ?? "").join("\n") ?? "";
-  return {
-    result: parseClaudeJson(text),
-    usage: json.usage
-  };
+  return parseClaudeResponse(model, json);
 }
 
 async function analyzeCandidate(

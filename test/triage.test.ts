@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { parseRedirectsYaml } from "../src/compare.js";
-import { parseClaudeJson, selectTriageCandidates, shouldReuseCache, sortTriageRows } from "../src/triage.js";
+import { parseClaudeJson, parseClaudeResponse, selectTriageCandidates, shouldReuseCache, sortTriageRows } from "../src/triage.js";
 
 test("page selection prefers larger traffic loss", () => {
   const rows = selectTriageCandidates({
@@ -51,10 +51,30 @@ test("cache reuse depends on matching content hash and model", () => {
   assert.equal(shouldReuseCache({ model: "x", url: "u", contentHash: "abc", result: {} as never, analyzedAt: "now" }, "y", "abc"), false);
 });
 
-test("structured AI output parses from JSON text", () => {
+test("valid structured JSON parsing succeeds", () => {
   const parsed = parseClaudeJson(`{"page_purpose":"Guide","primary_search_intent":"Find tickets","content_cluster":"TEAMLAB","distinctiveness_score":60,"firsthand_evidence_score":70,"specificity_score":65,"commercial_pressure_score":20,"templated_language_score":10,"overlap_risk_score":30,"trust_evidence_score":55,"likely_user_value_score":62,"strengths":["specific"],"weaknesses":["dated"],"evidence_missing":["pricing proof"],"overlapping_topics":["teamlab"],"recommended_disposition":"IMPROVE","recommended_action":"Update firsthand details.","confidence":"MEDIUM"}`);
   assert.equal(parsed.content_cluster, "TEAMLAB");
   assert.equal(parsed.recommended_disposition, "IMPROVE");
+});
+
+test("missing text response throws a clear error", () => {
+  assert.throws(
+    () => parseClaudeResponse("claude-sonnet-5", {
+      stop_reason: "end_turn",
+      content: [{ type: "tool_use" }]
+    }),
+    /missing text.*claude-sonnet-5.*content block types: tool_use/i
+  );
+});
+
+test("max_tokens response throws a clear error", () => {
+  assert.throws(
+    () => parseClaudeResponse("claude-sonnet-5", {
+      stop_reason: "max_tokens",
+      content: [{ type: "text", text: "{\"page_purpose\":\"Guide\"}" }]
+    }),
+    /max_tokens.*claude-sonnet-5.*returned text/i
+  );
 });
 
 test("final priority sorting is descending", () => {
