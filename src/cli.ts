@@ -9,7 +9,7 @@ const DEFAULT_OPTIONS: AuditOptions = {
   concurrency: 5,
   timeoutMs: 15_000,
   maxBodyBytes: 5 * 1024 * 1024,
-  userAgent: "site-audit-script/0.1 (+https://github.com/atclarkson/site-audit-script)"
+  userAgent: "AdamAndLindsSiteAudit/1.0"
 };
 
 function parseArgs(argv: string[]): { url: string; options: AuditOptions } {

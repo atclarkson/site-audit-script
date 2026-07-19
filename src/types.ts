@@ -70,4 +70,5 @@ export type AuditRow = {
   duplicate_type: string;
   duplicate_urls: string;
   similarity: string;
+  severe_canonical_issue: string;
 };

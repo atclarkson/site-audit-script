@@ -54,7 +54,13 @@ export function printSummary(metrics: PageMetrics[], rows: AuditRow[], outputPat
   console.log(`Near-duplicate groups: ${nearDuplicateGroups}`);
   console.log(`Pages with meaningful findings: ${meaningfulFindings}`);
   console.log("Top 20 priority URLs:");
-  for (const row of rows.slice(0, 20)) {
+  const topRows = rows.filter((row) =>
+    !lowValueTypes.has(row.page_type) ||
+    row.status === "FAILED" ||
+    Number(row.status) >= 400 ||
+    row.severe_canonical_issue === "yes"
+  );
+  for (const row of topRows.slice(0, 20)) {
     console.log(`- [${row.priority}] ${row.url}`);
   }
 }

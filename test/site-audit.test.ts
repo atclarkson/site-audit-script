@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { buildAuditRows, extractPageMetrics } from "../src/analyze.js";
 import { normalizeUrl, parseSitemapXml } from "../src/crawl.js";
+import { printSummary } from "../src/output.js";
 import type { FetchResult, PageMetrics } from "../src/types.js";
 
 function makePage(overrides: Partial<PageMetrics> = {}): PageMetrics {
@@ -148,6 +149,33 @@ test("exact duplicate content is detected", () => {
   assert.equal(rows[0].similarity, "100");
 });
 
+test("exact duplicate content-to-tag pairs are capped at priority 40", () => {
+  const rows = buildAuditRows([
+    makePage({ url: "https://example.com/japan", finalUrl: "https://example.com/japan", canonicalUrl: "https://example.com/japan", pageType: "CONTENT", title: "Japan", visibleTextHash: "same-hash", normalizedVisibleText: "same content words" }),
+    makePage({ url: "https://example.com/tag/japan", finalUrl: "https://example.com/tag/japan", canonicalUrl: "https://example.com/tag/japan", pageType: "TAG_ARCHIVE", title: "Japan", visibleTextHash: "same-hash", normalizedVisibleText: "same content words" })
+  ], "https://example.com/");
+  assert.equal(rows[0].priority, 40);
+  assert.equal(rows[1].priority, 10);
+});
+
+test("near-duplicate analysis only compares content pages", () => {
+  const rows = buildAuditRows([
+    makePage({ url: "https://example.com/a", finalUrl: "https://example.com/a", canonicalUrl: "https://example.com/a", pageType: "CONTENT", visibleTextHash: "hash-a", normalizedVisibleText: "one two three four five" }),
+    makePage({ url: "https://example.com/tag/a", finalUrl: "https://example.com/tag/a", canonicalUrl: "https://example.com/tag/a", pageType: "TAG_ARCHIVE", visibleTextHash: "hash-b", normalizedVisibleText: "one two three four six" })
+  ], "https://example.com/");
+  assert.equal(rows[0].duplicate_type, "");
+  assert.equal(rows[1].duplicate_type, "");
+});
+
+test("url variants require high similarity or an obvious campaign marker", () => {
+  const rows = buildAuditRows([
+    makePage({ url: "https://example.com/holafly", finalUrl: "https://example.com/holafly", canonicalUrl: "https://example.com/holafly", visibleTextHash: "hash-a", normalizedVisibleText: "alpha beta gamma delta epsilon zeta eta theta" }),
+    makePage({ url: "https://example.com/holafly-2026-campaign", finalUrl: "https://example.com/holafly-2026-campaign", canonicalUrl: "https://example.com/holafly-2026-campaign", visibleTextHash: "hash-b", normalizedVisibleText: "alpha beta gamma" })
+  ], "https://example.com/");
+  assert.equal(rows[0].duplicate_type, "URL_VARIANT");
+  assert.equal(rows[1].duplicate_type, "URL_VARIANT");
+});
+
 test("duplicate title is detected", () => {
   const rows = buildAuditRows([
     makePage({ url: "https://example.com/a", finalUrl: "https://example.com/a", canonicalUrl: "https://example.com/a", title: "Same", visibleTextHash: "hash-a" }),
@@ -199,4 +227,70 @@ test("recommendations are based on the highest-impact issue", () => {
     })
   ], "https://example.com/");
   assert.match(rows[0].recommended_action, /Redirect it or restore the page/);
+});
+
+test("top priority console output excludes archive pages without severe issues", () => {
+  const logs: string[] = [];
+  const originalLog = console.log;
+  console.log = (message?: unknown) => {
+    logs.push(String(message));
+  };
+
+  try {
+    printSummary([
+      makePage({ url: "https://example.com/tag/japan", finalUrl: "https://example.com/tag/japan", canonicalUrl: "https://example.com/tag/japan", pageType: "TAG_ARCHIVE" }),
+      makePage({ url: "https://example.com/article", finalUrl: "https://example.com/article", canonicalUrl: "https://example.com/article", pageType: "CONTENT" })
+    ], [
+      {
+        priority: 10,
+        url: "https://example.com/tag/japan",
+        page_type: "TAG_ARCHIVE",
+        status: "200",
+        indexable: "yes",
+        title: "Japan",
+        h1: "Japan",
+        word_count: 500,
+        technical_issues: "",
+        content_risk: "Near-duplicate content",
+        recommended_action: "Review archive overlap.",
+        response_time_ms: 10,
+        canonical: "https://example.com/tag/japan",
+        internal_links: 1,
+        external_links: 0,
+        images_missing_alt: 0,
+        duplicate_type: "NEAR_DUPLICATE",
+        duplicate_urls: "https://example.com/tag/asia",
+        similarity: "91",
+        severe_canonical_issue: "no"
+      },
+      {
+        priority: 25,
+        url: "https://example.com/article",
+        page_type: "CONTENT",
+        status: "200",
+        indexable: "yes",
+        title: "Article",
+        h1: "Article",
+        word_count: 80,
+        technical_issues: "",
+        content_risk: "Only 80 visible words",
+        recommended_action: "Expand or consolidate.",
+        response_time_ms: 10,
+        canonical: "https://example.com/article",
+        internal_links: 1,
+        external_links: 0,
+        images_missing_alt: 0,
+        duplicate_type: "",
+        duplicate_urls: "",
+        similarity: "",
+        severe_canonical_issue: "no"
+      }
+    ], "output/site-audit.csv");
+  } finally {
+    console.log = originalLog;
+  }
+
+  const topLines = logs.filter((line) => line.startsWith("- ["));
+  assert.equal(topLines.length, 1);
+  assert.match(topLines[0], /https:\/\/example\.com\/article/);
 });

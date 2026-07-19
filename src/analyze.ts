@@ -117,6 +117,15 @@ function maybeUrlVariant(a: PageMetrics, b: PageMetrics): boolean {
     normalizePathname(new URL(a.url).pathname) !== normalizePathname(new URL(b.url).pathname);
 }
 
+function hasObviousVariantMarker(url: string): boolean {
+  const path = normalizePathname(new URL(url).pathname).toLowerCase();
+  return /(20\d{2}|spring|summer|fall|autumn|winter|promo|promo-code|campaign|v\d+|\d+$)/.test(path);
+}
+
+function isSevereCanonicalFinding(message: string): boolean {
+  return /Canonical points to another host|Canonical target has issues|Duplicate pages use conflicting canonicals|Canonical is invalid/.test(message);
+}
+
 function visibleWordCount(text: string): number {
   return text ? text.split(/\s+/).length : 0;
 }
@@ -252,7 +261,7 @@ function buildDuplicateMap(metrics: PageMetrics[]): {
     }
   }
 
-  const candidates = metrics.filter((page) => page.normalizedVisibleText && page.pageType !== "LEGAL" && page.pageType !== "UTILITY");
+  const candidates = metrics.filter((page) => page.normalizedVisibleText && page.pageType === "CONTENT");
   const seenNear = new Set<string>();
   for (let index = 0; index < candidates.length; index += 1) {
     for (let inner = index + 1; inner < candidates.length; inner += 1) {
@@ -271,7 +280,7 @@ function buildDuplicateMap(metrics: PageMetrics[]): {
           seenNear.add(key);
           addDuplicate([a.url, b.url], "NEAR_DUPLICATE", Math.round(similarity * 100));
         }
-      } else if (maybeUrlVariant(a, b) && similarity >= 0.5) {
+      } else if (maybeUrlVariant(a, b) && (similarity >= 0.8 || hasObviousVariantMarker(a.url) || hasObviousVariantMarker(b.url))) {
         const key = [a.url, b.url].sort().join("::");
         if (!seenNear.has(key)) {
           seenNear.add(key);
@@ -365,6 +374,12 @@ export function buildAuditRows(metrics: PageMetrics[], rootUrl: string): AuditRo
     const exactDuplicate = duplicateInfos.find((info) => info.duplicateType === "EXACT_CONTENT");
     const nearDuplicate = duplicateInfos.find((info) => info.duplicateType === "NEAR_DUPLICATE");
     const urlVariant = duplicateInfos.find((info) => info.duplicateType === "URL_VARIANT");
+    const exactDuplicatePages = exactDuplicate
+      ? [page, ...exactDuplicate.duplicateUrls.map((url) => crawledByUrl.get(url)).filter((candidate): candidate is PageMetrics => Boolean(candidate))]
+      : [];
+    const exactDuplicateHasTagPair = exactDuplicatePages.length > 1 &&
+      exactDuplicatePages.some((candidate) => candidate.pageType === "CONTENT") &&
+      exactDuplicatePages.some((candidate) => candidate.pageType === "TAG_ARCHIVE");
 
     if (exactDuplicate) {
       addFinding({
@@ -518,6 +533,9 @@ export function buildAuditRows(metrics: PageMetrics[], rootUrl: string): AuditRo
     if (LOW_PRIORITY_TYPES.has(page.pageType) && !page.fetchError && page.status < 400 && !severeCanonicalProblem) {
       priority = Math.min(priority, 10);
     }
+    if (exactDuplicateHasTagPair) {
+      priority = Math.min(priority, 40);
+    }
 
     priority = Math.min(100, priority);
 
@@ -542,7 +560,8 @@ export function buildAuditRows(metrics: PageMetrics[], rootUrl: string): AuditRo
       images_missing_alt: page.imagesMissingAltCount,
       duplicate_type: primaryDuplicate?.duplicateType ?? "",
       duplicate_urls: primaryDuplicate?.duplicateUrls.join(", ") ?? "",
-      similarity: primaryDuplicate?.similarity ? String(primaryDuplicate.similarity) : ""
+      similarity: primaryDuplicate?.similarity ? String(primaryDuplicate.similarity) : "",
+      severe_canonical_issue: technicalIssues.some(isSevereCanonicalFinding) ? "yes" : "no"
     };
   });
 
