@@ -6,7 +6,7 @@ import { fetchWithLimit } from "./crawl.js";
 import type { AuditOptions } from "./types.js";
 import { buildComparisonRows, normalizeSiteUrl, parseCsvLine, parseGscCsv, parseRedirectsYaml } from "./compare.js";
 
-const DEFAULT_MODEL = "claude-sonnet-4-20250514";
+const DEFAULT_MODEL = "claude-sonnet-5";
 const DEFAULT_LIMIT = 50;
 const DEFAULT_CONCURRENCY = 2;
 const MAX_CONTENT_CHARS = 16000;
@@ -469,7 +469,8 @@ async function callClaude(apiKey: string, model: string, prompt: string): Promis
   });
 
   if (!response.ok) {
-    throw new Error(`Anthropic request failed: ${response.status}`);
+    const responseBody = await response.text();
+    throw new Error(`Anthropic request failed for model ${model}: HTTP ${response.status}; body: ${responseBody}`);
   }
 
   const json = await response.json() as {
